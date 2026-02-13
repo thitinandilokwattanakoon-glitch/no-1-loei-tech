@@ -8,7 +8,7 @@
 # - Light Blue + White theme, dark-gray text
 # - Google Drive CSV loader (robust)
 # - No matplotlib (Plotly only)
-# - Outlier section: Goal & Pledged (Before vs After) with Log Transformation + Median/IQR
+# - Outlier: Goal & Pledged (Before vs After) with Log1p + Median/IQR
 # ==========================================================
 
 import re
@@ -34,28 +34,22 @@ st.set_page_config(
 BEFORE_URL = "https://drive.google.com/file/d/1qRTrEuENBRdrx4aVzT7WwDg8qsCAEIlh/view?usp=sharing"
 AFTER_URL  = "https://drive.google.com/file/d/15gI9_y2FWKLwvxTvfpjy39sMtuf7bs-i/view?usp=sharing"
 
-
 # -----------------------------
-# Theme / CSS (Light mode + readable dropdown)
+# Theme / CSS
 # -----------------------------
 st.markdown(
     """
 <style>
-/* App background + base text */
 .stApp { background: #f4f9ff; }
 html, body, [class*="css"], p, span, label, small, div { color: #0f172a !important; }
-
-/* Titles */
 h1, h2, h3, h4 { color: #0b3d91 !important; }
 
-/* Sidebar */
 section[data-testid="stSidebar"] {
   background: #e6f2ff !important;
   border-right: 1px solid rgba(15,23,42,0.10);
 }
 section[data-testid="stSidebar"] * { color: #0f172a !important; }
 
-/* Cards */
 .card {
   background: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.12);
@@ -65,7 +59,6 @@ section[data-testid="stSidebar"] * { color: #0f172a !important; }
 }
 .mini { font-size: 12px; opacity: 0.8; }
 
-/* Buttons */
 .stButton > button {
   background: #1d4ed8 !important;
   color: #ffffff !important;
@@ -76,55 +69,26 @@ section[data-testid="stSidebar"] * { color: #0f172a !important; }
 }
 .stButton > button:hover { filter: brightness(1.05); }
 
-/* Inputs: make dropdown/selected text readable */
 div[data-baseweb="select"] * { color: #0f172a !important; }
 div[data-baseweb="select"] input { color: #0f172a !important; }
 div[data-baseweb="popover"] * { color: #0f172a !important; }
 div[role="listbox"] * { color: #0f172a !important; }
 
-/* Tabs */
 button[data-baseweb="tab"] * { color: #0f172a !important; font-weight: 600; }
-
-/* Dataframe header */
 thead tr th { color: #0f172a !important; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-
-# -----------------------------
-# Helpers
-# -----------------------------
-def median_iqr(s: pd.Series):
-    s = pd.to_numeric(s, errors="coerce").dropna()
-    if len(s) == 0:
-        return np.nan, np.nan, np.nan
-    q1 = s.quantile(0.25)
-    med = s.quantile(0.50)
-    q3 = s.quantile(0.75)
-    return med, q1, q3
-
-def money_short(x):
-    try:
-        if pd.isna(x):
-            return "-"
-        x = float(x)
-        if abs(x) >= 1_000_000_000:
-            return f"{x/1_000_000_000:.2f}B"
-        if abs(x) >= 1_000_000:
-            return f"{x/1_000_000:.2f}M"
-        if abs(x) >= 1_000:
-            return f"{x/1_000:.2f}K"
-        return f"{x:.0f}"
-    except Exception:
-        return "-"
-
+# ==========================================================
+# Helpers (NO duplicates)
+# ==========================================================
 def drive_id(url: str) -> str:
     m = re.search(r"/d/([^/]+)", url)
     return m.group(1) if m else url
 
-def _get_confirm_token(resp: requests.Response) -> str | None:
+def _get_confirm_token(resp: requests.Response):
     for k, v in resp.cookies.items():
         if k.startswith("download_warning"):
             return v
@@ -133,54 +97,58 @@ def _get_confirm_token(resp: requests.Response) -> str | None:
 @st.cache_data(show_spinner=False)
 def load_drive_csv(url: str) -> pd.DataFrame:
     """
-    โหลด CSV จาก Google Drive (Drive) แบบรองรับไฟล์ใหญ่:
-    - ดึง confirm token ถ้ามี
-    - อ่านผ่าน BytesIO แล้วค่อย pd.read_csv
+    โหลด CSV จาก Google Drive แบบรองรับไฟล์ใหญ่:
+    - handle confirm token
+    - read content via BytesIO
     """
     fid = drive_id(url)
     session = requests.Session()
-
     base = "https://drive.google.com/uc?export=download"
-    resp = session.get(base, params={"id": fid}, stream=True, timeout=60)
 
+    resp = session.get(base, params={"id": fid}, stream=True, timeout=90)
     token = _get_confirm_token(resp)
     if token:
-        resp = session.get(base, params={"id": fid, "confirm": token}, stream=True, timeout=60)
+        resp = session.get(base, params={"id": fid, "confirm": token}, stream=True, timeout=90)
 
     resp.raise_for_status()
-    content = resp.content
-    return pd.read_csv(io.BytesIO(content))
+    return pd.read_csv(io.BytesIO(resp.content))
 
 def safe_to_datetime(series: pd.Series) -> pd.Series:
     return pd.to_datetime(series, errors="coerce")
 
-def add_working_time_cols(df: pd.DataFrame) -> pd.DataFrame:
+def to_numeric(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce")
+
+def add_working_cols(df: pd.DataFrame) -> pd.DataFrame:
     """
-    เพิ่มคอลัมน์ใช้งานชั่วคราว (temporary) สำหรับฟิลเตอร์/EDA:
+    เพิ่มคอลัมน์สำหรับใช้งาน (ไม่จำเป็นต้องมีในไฟล์หลังคลีน):
     - Launched_dt, Deadline_dt, DurationDays
-    NOTE: ไม่ได้แปลว่าไฟล์หลังคลีนต้องมีคอลัมน์พวกนี้
+    - Coerce Goal/Pledged/Backers เป็น numeric เพื่อให้ slider/EDA ใช้ได้
     """
     out = df.copy()
-    if "Launched" in out.columns:
-        out["Launched_dt"] = safe_to_datetime(out["Launched"])
-    else:
-        out["Launched_dt"] = pd.NaT
 
-    if "Deadline" in out.columns:
-        out["Deadline_dt"] = safe_to_datetime(out["Deadline"])
-    else:
-        out["Deadline_dt"] = pd.NaT
+    # datetime
+    out["Launched_dt"] = safe_to_datetime(out["Launched"]) if "Launched" in out.columns else pd.NaT
+    out["Deadline_dt"] = safe_to_datetime(out["Deadline"]) if "Deadline" in out.columns else pd.NaT
 
     if out["Launched_dt"].notna().any() and out["Deadline_dt"].notna().any():
         out["DurationDays"] = (out["Deadline_dt"] - out["Launched_dt"]).dt.days
     else:
         out["DurationDays"] = np.nan
 
+    # numeric (robust for sliders/plots)
+    for col in ["Goal", "Pledged", "Backers", "DurationDays"]:
+        if col in out.columns:
+            out[col] = to_numeric(out[col])
+
     return out
 
 def drop_temp_cols(df: pd.DataFrame) -> pd.DataFrame:
     temp = ["Launched_dt", "Deadline_dt", "DurationDays"]
     return df.drop(columns=[c for c in temp if c in df.columns], errors="ignore")
+
+def show_plot(fig, key: str):
+    st.plotly_chart(fig, use_container_width=True, key=key)
 
 def kpi_block(title: str, value: str, note: str = ""):
     st.markdown(
@@ -198,9 +166,6 @@ def pct(x: float) -> str:
     return f"{x*100:.2f}%"
 
 def money_short(x) -> str:
-    """
-    แสดงตัวเลขแบบย่อ (abbrev) เช่น 5,000 -> 5.0K, 50,000,000 -> 50.0M
-    """
     try:
         if pd.isna(x):
             return "-"
@@ -216,28 +181,28 @@ def money_short(x) -> str:
     except Exception:
         return "-"
 
-def show_plot(fig, key: str):
-    st.plotly_chart(fig, use_container_width=True, key=key)
+def median_iqr(series: pd.Series):
+    s = to_numeric(series).dropna()
+    if s.empty:
+        return np.nan, np.nan, np.nan
+    q1 = s.quantile(0.25)
+    med = s.quantile(0.50)
+    q3 = s.quantile(0.75)
+    return med, q1, q3
 
+# ==========================================================
+# Filters (build once)
+# ==========================================================
 def build_filters(df_work: pd.DataFrame, key_prefix: str = "main") -> pd.DataFrame:
-    """
-    ฟิลเตอร์ (Filters) ด้านซ้าย สร้างครั้งเดียว:
-    - Search Name
-    - Multiselect: State, Category, Subcategory, Country
-    - Date range: Launched_dt
-    - Sliders: Goal, Pledged, Backers, DurationDays
-    """
     st.sidebar.markdown("## ตัวกรอง (Filters)")
     df2 = df_work.copy()
 
-    # Search
     q = st.sidebar.text_input(
         "ค้นหาชื่อโครงการ (Search Name)",
         value="",
         key=f"{key_prefix}_search_name",
     )
 
-    # Categorical filters
     cat_cols = ["State", "Category", "Subcategory", "Country"]
     selected = {}
     for col in cat_cols:
@@ -250,7 +215,6 @@ def build_filters(df_work: pd.DataFrame, key_prefix: str = "main") -> pd.DataFra
                 key=f"{key_prefix}_{col}_ms",
             )
 
-    # Date range (Launched)
     launched_range = None
     if "Launched_dt" in df2.columns and df2["Launched_dt"].notna().any():
         min_d = df2["Launched_dt"].min().date()
@@ -261,19 +225,17 @@ def build_filters(df_work: pd.DataFrame, key_prefix: str = "main") -> pd.DataFra
             key=f"{key_prefix}_launched_range",
         )
 
-    # Numeric sliders
     num_cols = ["Goal", "Pledged", "Backers", "DurationDays"]
     ranges = {}
     for col in num_cols:
-        if col in df2.columns and pd.api.types.is_numeric_dtype(df2[col]):
-            valid = df2[col].dropna()
+        if col in df2.columns:
+            valid = to_numeric(df2[col]).dropna()
             if len(valid) > 0:
                 vmin = float(valid.min())
                 vmax = float(valid.max())
-                # กันเคส vmin == vmax
                 if vmin == vmax:
-                    vmin = vmin - 1.0
-                    vmax = vmax + 1.0
+                    vmin -= 1.0
+                    vmax += 1.0
                 ranges[col] = st.sidebar.slider(
                     f"ช่วง {col}",
                     min_value=vmin,
@@ -282,7 +244,6 @@ def build_filters(df_work: pd.DataFrame, key_prefix: str = "main") -> pd.DataFra
                     key=f"{key_prefix}_{col}_slider",
                 )
 
-    # Apply filters
     mask = pd.Series(True, index=df2.index)
 
     if q.strip() and "Name" in df2.columns:
@@ -297,26 +258,123 @@ def build_filters(df_work: pd.DataFrame, key_prefix: str = "main") -> pd.DataFra
         mask &= df2["Launched_dt"].dt.date.between(start, end)
 
     for col, (lo, hi) in ranges.items():
-        mask &= df2[col].between(lo, hi)
+        mask &= to_numeric(df2[col]).between(lo, hi)
 
     out = df2.loc[mask].copy()
     st.sidebar.markdown("---")
     st.sidebar.caption(f"ผลลัพธ์หลังกรอง: {len(out):,} แถว")
     return out
 
-def median_iqr(series: pd.Series) -> tuple[float, float, float]:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if len(s) == 0:
-        return np.nan, np.nan, np.nan
-    q1 = s.quantile(0.25)
-    med = s.quantile(0.50)
-    q3 = s.quantile(0.75)
-    return med, q1, q3
+# ==========================================================
+# Outlier Panel (Plotly only, anti-freeze)
+# ==========================================================
+def outlier_panel(df_src: pd.DataFrame, title_prefix: str, fig_key_prefix: str):
+    st.markdown(f"### {title_prefix} — Outlier (Goal / Pledged)")
 
+    cA, cB, cC = st.columns([1, 1, 2])
+    with cA:
+        sample_n = st.number_input(
+            "sample size (สำหรับ plot)",
+            min_value=1000,
+            max_value=15000,
+            value=5000,
+            step=1000,
+            key=f"{fig_key_prefix}_sample_n",
+        )
+    with cB:
+        show_points = st.toggle(
+            "โชว์จุด outlier (points)",
+            value=False,
+            key=f"{fig_key_prefix}_show_points",
+        )
+    with cC:
+        st.caption("แนะนำ: ปิด points + sample 3k–10k จะลื่นสุด")
 
-# -----------------------------
-# Authentication (simple)
-# -----------------------------
+    plot_df = df_src.copy()
+    if len(plot_df) > sample_n:
+        plot_df = plot_df.sample(n=int(sample_n), random_state=42)
+
+    points_mode = "outliers" if show_points else False
+
+    col1, col2 = st.columns(2)
+
+    # Goal
+    with col1:
+        st.markdown("#### Goal")
+        if "Goal" not in df_src.columns:
+            st.warning("ไม่พบคอลัมน์ Goal")
+        else:
+            g_all = to_numeric(df_src["Goal"])
+            med, q1, q3 = median_iqr(g_all)
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
+            st.caption(
+                f"Raw: Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})"
+            )
+
+            g_plot = to_numeric(plot_df["Goal"])
+            fig_raw = px.box(
+                x=g_plot,
+                points=points_mode,
+                title="Boxplot: Goal (Raw)",
+            )
+            fig_raw.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            show_plot(fig_raw, f"{fig_key_prefix}_goal_raw")
+
+            g_log_all = np.log1p(g_all)
+            med2, q12, q32 = median_iqr(g_log_all)
+            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
+            st.caption(f"Log1p: Median={med2:.3f} | IQR={iqr2:.3f}")
+
+            g_log_plot = np.log1p(g_plot)
+            fig_log = px.box(
+                pd.DataFrame({"goal_log": g_log_plot}),
+                x="goal_log",
+                points=points_mode,
+                title="Boxplot: Goal (Log1p)",
+            )
+            fig_log.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            show_plot(fig_log, f"{fig_key_prefix}_goal_log")
+
+    # Pledged
+    with col2:
+        st.markdown("#### Pledged")
+        if "Pledged" not in df_src.columns:
+            st.warning("ไม่พบคอลัมน์ Pledged")
+        else:
+            p_all = to_numeric(df_src["Pledged"])
+            med, q1, q3 = median_iqr(p_all)
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
+            st.caption(
+                f"Raw: Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})"
+            )
+
+            p_plot = to_numeric(plot_df["Pledged"])
+            fig_raw = px.box(
+                x=p_plot,
+                points=points_mode,
+                title="Boxplot: Pledged (Raw)",
+            )
+            fig_raw.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            show_plot(fig_raw, f"{fig_key_prefix}_pledged_raw")
+
+            p_log_all = np.log1p(p_all)
+            med2, q12, q32 = median_iqr(p_log_all)
+            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
+            st.caption(f"Log1p: Median={med2:.3f} | IQR={iqr2:.3f}")
+
+            p_log_plot = np.log1p(p_plot)
+            fig_log = px.box(
+                pd.DataFrame({"pledged_log": p_log_plot}),
+                x="pledged_log",
+                points=points_mode,
+                title="Boxplot: Pledged (Log1p)",
+            )
+            fig_log.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            show_plot(fig_log, f"{fig_key_prefix}_pledged_log")
+
+# ==========================================================
+# Authentication
+# ==========================================================
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 if "show_guide" not in st.session_state:
@@ -329,7 +387,7 @@ def show_onboarding():
 **เส้นทางการใช้งาน (Overview → Detail)**
 1) ไปที่ **ภาพรวม (Overview)** เพื่อดู KPI และสัดส่วนความสำเร็จ  
 2) ใช้ **ตัวกรอง (Filters)** ด้านซ้าย: Category / Country / State / วันที่ / ช่วง Goal-Pledged-Backers  
-3) ไปที่ **คุณภาพข้อมูล & ขั้นตอนทำความสะอาด** เพื่อเห็น Before vs After  
+3) ไปที่ **คุณภาพข้อมูล & ขั้นตอนทำความสะอาด** เพื่อเห็น Before vs After + Outlier (Log1p + Median/IQR)  
 4) ไปที่ **EDA & ความสัมพันธ์** เพื่อดูการกระจาย + ความสัมพันธ์ (Correlation)  
 5) ไปที่ **Insights** เพื่อดู What–Why–So What พร้อมกราฟยืนยัน
         """
@@ -340,7 +398,7 @@ def show_onboarding():
             st.session_state["show_guide"] = False
             st.rerun()
     with c2:
-        st.caption("หากอยากดูอีกครั้ง เปิดได้จากปุ่ม “เปิดคู่มือ” บนหน้าเว็บ")
+        st.caption("หากอยากดูอีกครั้ง กดปุ่ม “เปิดคู่มือ” บนหน้าเว็บ")
 
 def login_view():
     st.markdown("## 🔐 เข้าสู่ระบบ (Login)")
@@ -372,22 +430,20 @@ if not st.session_state["logged_in"]:
     login_view()
     st.stop()
 
-# -----------------------------
-# Header
-# -----------------------------
-top = st.container()
-with top:
+# ==========================================================
+# Header + Onboarding
+# ==========================================================
+with st.container():
     c1, c2 = st.columns([3, 1])
     with c1:
         st.markdown("# 📊 Crowdfunding Dashboard")
-        st.caption("Before vs After — ใช้ไฟล์จาก Google Drive (Drive) + ฟิลเตอร์ + EDA + Insight")
+        st.caption("Before vs After — ใช้ไฟล์จาก Google Drive + ฟิลเตอร์ + EDA + Insights")
     with c2:
         if st.button("ออกจากระบบ (Logout)", key="btn_logout"):
             st.session_state["logged_in"] = False
             st.session_state["show_guide"] = True
             st.rerun()
 
-# Onboarding
 if st.session_state.get("show_guide", True):
     with st.expander("👋 หน้าต่างสอนใช้เบื้องต้น (กดเพื่อดู/ซ่อน)", expanded=True):
         show_onboarding()
@@ -396,23 +452,23 @@ else:
         st.session_state["show_guide"] = True
         st.rerun()
 
-# -----------------------------
-# Load data from Google Drive
-# -----------------------------
+# ==========================================================
+# Load data (ONCE)
+# ==========================================================
 with st.spinner("กำลังโหลดข้อมูลจาก Google Drive (Drive)..."):
     df_before_raw = load_drive_csv(BEFORE_URL)
     df_after_raw  = load_drive_csv(AFTER_URL)
 
-# Working copy for filters/EDA (temporary time cols)
-df_before_work = add_working_time_cols(df_before_raw)
-df_after_work  = add_working_time_cols(df_after_raw)
+# working copies
+df_before_work = add_working_cols(df_before_raw)
+df_after_work  = add_working_cols(df_after_raw)
 
-# ✅ Build filters once (shared)
+# build filters once (use AFTER)
 filtered_df = build_filters(df_after_work, key_prefix="main")
 
-# -----------------------------
+# ==========================================================
 # Tabs (4 Modules)
-# -----------------------------
+# ==========================================================
 tab1, tab2, tab3, tab4 = st.tabs(
     [
         "1) ภาพรวม (Overview)",
@@ -430,13 +486,12 @@ with tab1:
     dff = filtered_df.copy()
     total = len(dff)
 
-    # KPI
     state_norm = dff["State"].astype(str).str.strip().str.lower() if "State" in dff.columns else pd.Series([], dtype=str)
     success_rate = (state_norm == "successful").mean() if total > 0 and len(state_norm) else 0.0
 
-    med_goal = dff["Goal"].median() if "Goal" in dff.columns and total > 0 else np.nan
-    med_pledged = dff["Pledged"].median() if "Pledged" in dff.columns and total > 0 else np.nan
-    med_backers = dff["Backers"].median() if "Backers" in dff.columns and total > 0 else np.nan
+    med_goal = to_numeric(dff["Goal"]).median() if "Goal" in dff.columns and total > 0 else np.nan
+    med_pledged = to_numeric(dff["Pledged"]).median() if "Pledged" in dff.columns and total > 0 else np.nan
+    med_backers = to_numeric(dff["Backers"]).median() if "Backers" in dff.columns and total > 0 else np.nan
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1: kpi_block("จำนวนโครงการ (Projects)", f"{total:,}", "หลังกรองด้วย Filters")
@@ -475,7 +530,6 @@ with tab1:
     st.markdown("### ตารางข้อมูล (หลังกรอง)")
     st.dataframe(drop_temp_cols(dff).head(200), use_container_width=True)
 
-    # Download filtered (remove temp cols)
     csv = drop_temp_cols(dff).to_csv(index=False).encode("utf-8")
     st.download_button(
         "⬇️ ดาวน์โหลดข้อมูลหลังกรอง (CSV)",
@@ -486,212 +540,43 @@ with tab1:
     )
 
 # ==========================================================
-# Helper for Outlier Panel (ต้องอยู่ก่อนใช้งาน)
-# ==========================================================
-def median_iqr(s: pd.Series):
-    s = pd.to_numeric(s, errors="coerce").dropna()
-    if s.empty:
-        return np.nan, np.nan, np.nan
-    q1 = s.quantile(0.25)
-    med = s.quantile(0.50)
-    q3 = s.quantile(0.75)
-    return med, q1, q3
-
-def money_short(x):
-    try:
-        if pd.isna(x):
-            return "-"
-        x = float(x)
-        if abs(x) >= 1_000_000_000:
-            return f"{x/1_000_000_000:.2f}B"
-        if abs(x) >= 1_000_000:
-            return f"{x/1_000_000:.2f}M"
-        if abs(x) >= 1_000:
-            return f"{x/1_000:.2f}K"
-        return f"{x:.0f}"
-    except Exception:
-        return "-"
-
-def outlier_panel(df_src: pd.DataFrame, title_prefix: str, fig_key_prefix: str):
-    st.markdown(f"### {title_prefix} — Outlier (Goal / Pledged)")
-
-    # กันค้าง: sample + toggle points
-    cA, cB, cC = st.columns([1, 1, 2])
-    with cA:
-        sample_n = st.number_input(
-            "sample size (สำหรับ plot)",
-            min_value=1000,
-            max_value=20000,
-            value=5000,
-            step=1000,
-            key=f"{fig_key_prefix}_sample_n",
-        )
-    with cB:
-        show_points = st.toggle(
-            "โชว์จุด outlier (points)",
-            value=False,  # ปิดไว้ก่อนกันค้าง
-            key=f"{fig_key_prefix}_show_points",
-        )
-    with cC:
-        st.caption("แนะนำ: ปิด points และใช้ sample 3k–10k จะลื่นสุด")
-
-    plot_df = df_src
-    if len(plot_df) > sample_n:
-        plot_df = plot_df.sample(n=int(sample_n), random_state=42)
-
-    points_mode = "outliers" if show_points else False
-
-    col1, col2 = st.columns(2)
-
-    # -------------------------
-    # Goal: raw + log
-    # -------------------------
-    with col1:
-        st.markdown("#### Goal")
-
-        if "Goal" not in df_src.columns:
-            st.warning("ไม่พบคอลัมน์ Goal")
-        else:
-            med, q1, q3 = median_iqr(df_src["Goal"])
-            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
-            st.caption(f"Raw: Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
-
-            fig_raw = px.box(
-                plot_df,
-                x=pd.to_numeric(plot_df["Goal"], errors="coerce"),
-                points=points_mode,
-                title="Boxplot: Goal (Raw)",
-            )
-            fig_raw.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig_raw, use_container_width=True, key=f"{fig_key_prefix}_goal_raw")
-
-            goal_log_all = np.log1p(pd.to_numeric(df_src["Goal"], errors="coerce"))
-            med2, q12, q32 = median_iqr(goal_log_all)
-            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
-            st.caption(f"Log1p: Median={med2:.3f} | IQR={iqr2:.3f}")
-
-            goal_log_plot = np.log1p(pd.to_numeric(plot_df["Goal"], errors="coerce"))
-            fig_log = px.box(
-                pd.DataFrame({"goal_log": goal_log_plot}),
-                x="goal_log",
-                points=points_mode,
-                title="Boxplot: Goal (Log1p)",
-            )
-            fig_log.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig_log, use_container_width=True, key=f"{fig_key_prefix}_goal_log")
-
-    # -------------------------
-    # Pledged: raw + log
-    # -------------------------
-    with col2:
-        st.markdown("#### Pledged")
-
-        if "Pledged" not in df_src.columns:
-            st.warning("ไม่พบคอลัมน์ Pledged")
-        else:
-            med, q1, q3 = median_iqr(df_src["Pledged"])
-            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
-            st.caption(f"Raw: Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
-
-            fig_raw = px.box(
-                plot_df,
-                x=pd.to_numeric(plot_df["Pledged"], errors="coerce"),
-                points=points_mode,
-                title="Boxplot: Pledged (Raw)",
-            )
-            fig_raw.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig_raw, use_container_width=True, key=f"{fig_key_prefix}_pledged_raw")
-
-            pledged_log_all = np.log1p(pd.to_numeric(df_src["Pledged"], errors="coerce"))
-            med2, q12, q32 = median_iqr(pledged_log_all)
-            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
-            st.caption(f"Log1p: Median={med2:.3f} | IQR={iqr2:.3f}")
-
-            pledged_log_plot = np.log1p(pd.to_numeric(plot_df["Pledged"], errors="coerce"))
-            fig_log = px.box(
-                pd.DataFrame({"pledged_log": pledged_log_plot}),
-                x="pledged_log",
-                points=points_mode,
-                title="Boxplot: Pledged (Log1p)",
-            )
-            fig_log.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig_log, use_container_width=True, key=f"{fig_key_prefix}_pledged_log")
-
-
-# ==========================================================
-# TAB 2: Data Quality & Cleaning Steps (+ Outlier Before/After)
+# TAB 2: Data Quality + Outlier Before/After
 # ==========================================================
 with tab2:
     st.markdown("## คุณภาพข้อมูล & ขั้นตอนทำความสะอาด (Before vs After)")
-    st.caption("โครงสร้างข้อมูล + แนวทางทำความสะอาด + การจัดการ outlier (ไม่ลบ, ใช้ Log1p, ดู Median/IQR)")
+    st.caption("โครงสร้างข้อมูล + การจัดการ outlier (ไม่ลบ, ใช้ log1p, ดู Median/IQR)")
 
-    # 1) สรุปโครงสร้าง Before/After
     b1, b2 = st.columns(2)
     with b1:
         st.markdown("### ก่อนทำความสะอาด (Before)")
-        st.write(f"Shape: **{df_before.shape[0]:,} แถว × {df_before.shape[1]:,} คอลัมน์**")
+        st.write(f"Shape: **{df_before_raw.shape[0]:,} แถว × {df_before_raw.shape[1]:,} คอลัมน์**")
         st.dataframe(
-            df_before.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
+            df_before_raw.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
             use_container_width=True,
         )
 
     with b2:
         st.markdown("### หลังทำความสะอาด (After)")
-        st.write(f"Shape: **{df_after.shape[0]:,} แถว × {df_after.shape[1]:,} คอลัมน์**")
+        st.write(f"Shape: **{df_after_raw.shape[0]:,} แถว × {df_after_raw.shape[1]:,} คอลัมน์**")
         st.dataframe(
-            df_after.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
+            df_after_raw.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
             use_container_width=True,
         )
 
     st.markdown("---")
 
-    # 2) Outlier Before vs After (กันค้างด้วย sample + points toggle)
     st.markdown("## Outlier (Before vs After) — ไม่ลบค่า ใช้ Log Transformation (log1p)")
     st.info(
         """
 - **ไม่ลบค่าที่สูงผิดปกติ (Do not remove extreme values)** เพราะอาจเป็นโครงการขนาดใหญ่ที่เกิดขึ้นจริง  
 - ใช้ **Log Transformation (log1p)** เพื่อลดความเบ้ (Skewness) ทำให้เห็นรูปแบบข้อมูลชัดขึ้น  
-- สรุปด้วย **Median** และ **IQR (Q3-Q1)** เพราะ robust กว่า mean เมื่อข้อมูลมี outlier จำนวนมาก
+- สรุปด้วย **Median** และ **IQR (Q3-Q1)** เพราะทนต่อ outlier ได้ดีกว่า mean
         """
     )
 
-    outlier_panel(df_before, "Before", "out_before")
+    outlier_panel(df_before_work, "Before", "out_before")
     st.markdown("---")
-    outlier_panel(df_after, "After", "out_after")
-
-
-    # Pledged
-    with c2:
-        st.markdown("**Pledged**")
-        if "Pledged" in df_src.columns:
-            med, q1, q3 = median_iqr(df_src["Pledged"])
-            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
-            st.caption(f"Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
-
-            fig = px.box(plot_df, x="Pledged", points=points_mode, title="Boxplot: Pledged (Raw)")
-            fig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            show_plot(fig, f"{fig_key_prefix}_pledged_raw")
-
-            pledged_log_all = np.log1p(pd.to_numeric(df_src["Pledged"], errors="coerce"))
-            med2, q12, q32 = median_iqr(pledged_log_all)
-            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
-            st.caption(f"log1p(Pledged): Median={med2:.3f} | IQR={iqr2:.3f}")
-
-            pledged_log_plot = np.log1p(pd.to_numeric(plot_df["Pledged"], errors="coerce"))
-            fig2 = px.box(pd.DataFrame({"pledged_log": pledged_log_plot}), x="pledged_log", points=points_mode, title="Boxplot: Pledged (Log)")
-            fig2.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            show_plot(fig2, f"{fig_key_prefix}_pledged_log")
-        else:
-            st.warning("ไม่พบคอลัมน์ Pledged")
-
-
-
-    st.markdown("### ก่อนทำความสะอาด (Before) — Outlier View")
-    outlier_panel(df_before_raw, "Before", "out_before")
-
-    st.markdown("---")
-    st.markdown("### หลังทำความสะอาด (After) — Outlier View")
-    outlier_panel(df_after_raw, "After", "out_after")
+    outlier_panel(df_after_work, "After", "out_after")
 
     st.markdown("---")
     with st.expander("สรุปขั้นตอนทำความสะอาด (Cleaning Steps)"):
@@ -700,7 +585,7 @@ with tab2:
 1) ตรวจสอบคุณภาพข้อมูล (Data Quality): shape, dtype, missing, ค่า invalid, ข้อมูลซ้ำ  
 2) แปลงวันเวลา (Datetime Parsing): `Launched`, `Deadline` เป็น datetime (datetime) เพื่อคำนวณ Duration  
 3) ตรวจค่าไม่สมเหตุสมผล (Business Invalid): เช่น Goal ≤ 0 (ถ้ากำหนดให้ลบ/กรอง)  
-4) จัดการ Outlier (Outlier Handling): ไม่ลบ → ใช้ log1p ลด skew + ใช้ Median/IQR อธิบายร่วม  
+4) จัดการ Outlier (Outlier Handling): **ไม่ลบ** → ใช้ **log1p** ลด skew + ใช้ **Median/IQR** อธิบายร่วม  
             """
         )
 
@@ -755,11 +640,10 @@ with tab3:
         st.warning("ตัวแปรตัวเลขไม่พอสำหรับ correlation หรือไม่มีข้อมูลหลังกรอง")
 
 # ==========================================================
-# TAB 4: Insights (What–Why–So What)
+# TAB 4: Insights
 # ==========================================================
 with tab4:
     st.markdown("## Insights (What–Why–So What) + หลักฐาน (Evidence)")
-
     dff = filtered_df.copy()
     total = len(dff)
 
@@ -774,13 +658,13 @@ with tab4:
         labels = [s.title() for s in order]
 
         sr = (state_norm == "successful").mean()
-
-        st.write(f"**What (พบอะไร):** Success ≈ **{sr*100:.2f}%** (จากข้อมูลหลังคลีน)")
-        st.write("**Why (ทำไมเป็นแบบนี้):** มักสะท้อนการตั้งเป้า (Goal) / การสื่อสารแคมเปญ / แรงสนับสนุนช่วงต้น (Early backers)")
-        st.write("**So What (ใช้ประโยชน์อย่างไร):** ก่อนตั้ง Goal ควรเทียบโปรเจกต์ที่สำเร็จในหมวดเดียวกัน และติดตาม Backers ช่วงต้นเป็นสัญญาณเตือน")
+        st.write(f"**What:** Success ≈ **{sr*100:.2f}%**")
+        st.write("**Why:** เป้าหมายสูง/การแข่งขันสูง/แรงสนับสนุนช่วงต้นยังไม่พอ")
+        st.write("**So What:** เทียบโปรเจกต์ที่สำเร็จในหมวดเดียวกันก่อนตั้ง Goal และติดตาม Backers ช่วงต้นเป็นสัญญาณเตือน")
 
         df_plot = pd.DataFrame({"State": labels, "Count": counts, "Percent": perc})
-        fig = px.bar(df_plot, x="State", y="Count", text=df_plot["Percent"].map(lambda x: f"{x:.2f}%"), title="Project Outcome (Count + %)")
+        fig = px.bar(df_plot, x="State", y="Count", text=df_plot["Percent"].map(lambda x: f"{x:.2f}%"),
+                     title="Project Outcome (Count + %)")
         fig.update_traces(textposition="outside")
         fig.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
         show_plot(fig, "ins1_outcome")
@@ -799,8 +683,8 @@ with tab4:
         top = grp.sort_values("success_rate", ascending=False).head(10)
 
         st.write(f"**What:** Top success rate เช่น {', '.join(top['Category'].astype(str).head(3).tolist())}")
-        st.write("**Why:** หมวดสาย creative มักมี community support และฐานแฟนคลับช่วยดันแคมเปญ")
-        st.write("**So What:** ใช้ Category เป็นตัวกรองเบื้องต้นเพื่อเพิ่มโอกาสสำเร็จ (โดยเฉพาะงานที่พึ่งพาชุมชน)")
+        st.write("**Why:** หมวด creative มักมี community support/ฐานแฟนคลับช่วยดัน")
+        st.write("**So What:** ใช้ Category เป็นตัวกรองเบื้องต้นเพื่อเพิ่มโอกาสสำเร็จ")
 
         fig = px.bar(top, x="success_rate", y="Category", orientation="h",
                      text=top["success_rate"].map(lambda x: f"{x:.2f}%"),
@@ -818,10 +702,11 @@ with tab4:
         cc["Percent"] = cc["Count"] / cc["Count"].sum() * 100
 
         st.write("**What:** ประเทศอันดับ 1 มีสัดส่วนสูงมากเมื่อเทียบประเทศอื่น")
-        st.write("**Why:** ระบบนิเวศ crowdfunding แข็งแรงกว่าในบางประเทศ ทำให้มีจำนวนโปรเจกต์เยอะ")
-        st.write("**So What:** เวลาสรุปภาพรวมควรแยกวิเคราะห์ตามประเทศเพื่อลด bias จากประเทศที่มีข้อมูลเยอะ")
+        st.write("**Why:** ระบบนิเวศ crowdfunding แข็งแรงกว่าในบางประเทศ")
+        st.write("**So What:** สรุปภาพรวมควรแยกตามประเทศเพื่อลด bias")
 
-        fig = px.bar(cc, x="Count", y="Country", orientation="h", text=cc["Percent"].map(lambda x: f"{x:.2f}%"),
+        fig = px.bar(cc, x="Count", y="Country", orientation="h",
+                     text=cc["Percent"].map(lambda x: f"{x:.2f}%"),
                      title="Top Countries (Share % within Top)")
         fig.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10))
         show_plot(fig, "ins3_country_share")
@@ -832,12 +717,12 @@ with tab4:
     st.markdown("### 🔍 Insight 4: Backers สัมพันธ์กับ Pledged สูง")
     if all(c in dff.columns for c in ["Pledged", "Backers"]) and total > 0:
         tmp = dff.dropna(subset=["Pledged", "Backers"]).copy()
-        tmp["pledged_log_tmp"] = np.log1p(pd.to_numeric(tmp["Pledged"], errors="coerce"))
+        tmp["pledged_log_tmp"] = np.log1p(to_numeric(tmp["Pledged"]))
         corr_val = tmp[["Pledged", "Backers"]].corr().iloc[0, 1]
 
         st.write(f"**What:** Correlation(Pledged, Backers) ≈ **{corr_val:.4f}**")
-        st.write("**Why:** Backers คือแรงขับหลักของยอดเงิน และเกิดผลเครือข่าย (Network effect) เมื่อแคมเปญเริ่มดัง")
-        st.write("**So What:** ใช้การโตของ Backers ช่วงต้นเป็นตัวชี้วัด (Signal) เพื่อทำนายโอกาสสำเร็จและปรับแผนทันเวลา")
+        st.write("**Why:** Backers คือแรงขับหลักของยอดเงิน และเกิด network effect เมื่อเริ่มดัง")
+        st.write("**So What:** ใช้ early backers growth เป็นสัญญาณทำนาย/ปรับแผนทันเวลา")
 
         fig = px.scatter(tmp, x="Backers", y="pledged_log_tmp", title="Backers vs Log(Pledged)")
         fig.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="log1p(Pledged)")
@@ -858,9 +743,9 @@ with tab4:
         by = tmp.groupby("dur_bin", as_index=False)["is_success"].mean()
         by["success_rate"] = by["is_success"] * 100
 
-        st.write("**What:** กลุ่มระยะเวลาสั้นบางช่วงมี success rate สูงกว่า")
-        st.write("**Why:** ความเร่งด่วน (Urgency) ทำให้ตัดสินใจเร็ว และแคมเปญที่เตรียมพร้อมมักไม่ต้องเปิดนาน")
-        st.write("**So What:** เลือกระยะเวลาให้เหมาะ (เช่น 15–30 วัน) และโฟกัสแรงสนับสนุนช่วงต้น")
+        st.write("**What:** ระยะเวลาบางช่วงมี success rate สูงกว่า")
+        st.write("**Why:** ความเร่งด่วนทำให้ตัดสินใจเร็ว และแคมเปญที่เตรียมพร้อมมักไม่ต้องเปิดนาน")
+        st.write("**So What:** เลือกระยะเวลาเหมาะ (เช่น 15–30 วัน) และโฟกัสแรงสนับสนุนช่วงต้น")
 
         fig = px.bar(by, x="dur_bin", y="success_rate",
                      text=by["success_rate"].map(lambda x: f"{x:.2f}%"),
@@ -870,8 +755,4 @@ with tab4:
                           xaxis_title="Duration (days)", yaxis_title="Success Rate (%)")
         show_plot(fig, "ins5_duration")
 
-    st.caption("หมายเหตุ: กราฟทุกอันใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
-
-
-
-
+    st.caption("หมายเหตุ: ทุกกราฟใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
