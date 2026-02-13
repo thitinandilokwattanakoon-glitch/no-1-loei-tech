@@ -8,11 +8,25 @@
 # - Light Blue + White theme, dark-gray text (high contrast)
 # ==========================================================
 
-import numpy as np
+import re
 import pandas as pd
-import plotly.express as px
 import streamlit as st
-import matplotlib.pyplot as plt
+
+BEFORE_URL = "https://drive.google.com/file/d/1qRTrEuENBRdrx4aVzT7WwDg8qsCAEIlh/view?usp=sharing"
+AFTER_URL  = "https://drive.google.com/file/d/15gI9_y2FWKLwvxTvfpjy39sMtuf7bs-i/view?usp=sharing"
+
+def drive_id(url: str) -> str:
+    m = re.search(r"/d/([^/]+)", url)
+    return m.group(1) if m else url
+
+@st.cache_data(show_spinner=False)
+def load_drive_csv(url: str) -> pd.DataFrame:
+    fid = drive_id(url)
+    csv_url = f"https://drive.google.com/uc?export=download&id={fid}"
+    return pd.read_csv(csv_url)
+
+df_before = load_drive_csv(BEFORE_URL)
+df_after  = load_drive_csv(AFTER_URL)
 
 
 
@@ -741,5 +755,6 @@ with tab4:
         st.warning("ไม่พบคอลัมน์ Pledged/Backers หรือไม่มีข้อมูลหลังกรอง")
 
     st.markdown("---")
+
 
 
