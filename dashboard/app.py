@@ -96,6 +96,30 @@ thead tr th { color: #0f172a !important; }
 # -----------------------------
 # Helpers
 # -----------------------------
+def median_iqr(s: pd.Series):
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    if len(s) == 0:
+        return np.nan, np.nan, np.nan
+    q1 = s.quantile(0.25)
+    med = s.quantile(0.50)
+    q3 = s.quantile(0.75)
+    return med, q1, q3
+
+def money_short(x):
+    try:
+        if pd.isna(x):
+            return "-"
+        x = float(x)
+        if abs(x) >= 1_000_000_000:
+            return f"{x/1_000_000_000:.2f}B"
+        if abs(x) >= 1_000_000:
+            return f"{x/1_000_000:.2f}M"
+        if abs(x) >= 1_000:
+            return f"{x/1_000:.2f}K"
+        return f"{x:.0f}"
+    except Exception:
+        return "-"
+
 def drive_id(url: str) -> str:
     m = re.search(r"/d/([^/]+)", url)
     return m.group(1) if m else url
@@ -467,6 +491,7 @@ with tab1:
 with tab2:
     st.markdown("## Before vs After (คุณภาพข้อมูล)")
     st.caption("แสดงโครงสร้างข้อมูล + ขั้นตอนทำความสะอาด + การจัดการ Outlier (ไม่ลบ, ใช้ Log Transformation, ดู Median/IQR)")
+    
 
     b1, b2 = st.columns(2)
     with b1:
@@ -484,6 +509,11 @@ with tab2:
             df_after_raw.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
             use_container_width=True,
         )
+        st.markdown("---")
+st.markdown("### Outlier (Before vs After) — ไม่ลบค่า ใช้ Log Transformation")
+
+outlier_panel(df_before, "ก่อนทำความสะอาด (Before)", "out_before")
+outlier_panel(df_after,  "หลังทำความสะอาด (After)",  "out_after")
 
     st.markdown("---")
     st.markdown("## ขั้นตอนการจัดการ Outlier (Outlier) — Goal และ Pledged")
@@ -496,10 +526,10 @@ with tab2:
         """
     )
 
-    def outlier_panel(df_src: pd.DataFrame, title_prefix: str, fig_key_prefix: str):
+   def outlier_panel(df_src: pd.DataFrame, title_prefix: str, fig_key_prefix: str):
     st.markdown(f"#### {title_prefix} — Outlier (Outlier) ของ Goal และ Pledged")
 
-    # ✅ Controls (ตั้งให้เว็บไม่ค้าง)
+    # Controls (กันค้าง)
     cA, cB, cC = st.columns([1, 1, 2])
     with cA:
         sample_n = st.number_input(
@@ -513,13 +543,13 @@ with tab2:
     with cB:
         show_points = st.toggle(
             "โชว์จุด outlier (points)",
-            value=False,  # ✅ default ปิดกันค้าง
+            value=False,  # ปิดไว้ก่อนกันค้าง
             key=f"{fig_key_prefix}_show_points",
         )
     with cC:
         st.caption("แนะนำ: ปิด points และใช้ sample 3k–10k จะลื่นสุด")
 
-    # สุ่มข้อมูลสำหรับ plot
+    # sample
     plot_df = df_src
     if len(plot_df) > sample_n:
         plot_df = plot_df.sample(n=int(sample_n), random_state=42)
@@ -528,54 +558,55 @@ with tab2:
 
     c1, c2 = st.columns(2)
 
-    # ---------------- Goal ----------------
+    # Goal
     with c1:
         st.markdown("**Goal**")
         if "Goal" in df_src.columns:
             med, q1, q3 = median_iqr(df_src["Goal"])
-            iqr = q3 - q1 if pd.notna(q3) and pd.notna(q1) else np.nan
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
             st.caption(f"Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
 
             fig = px.box(plot_df, x="Goal", points=points_mode, title="Boxplot: Goal (Raw)")
             fig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
             show_plot(fig, f"{fig_key_prefix}_goal_raw")
 
-            # Log transform (log1p)
-            goal_log = np.log1p(pd.to_numeric(df_src["Goal"], errors="coerce"))
-            med2, q12, q32 = median_iqr(goal_log)
-            iqr2 = q32 - q12 if pd.notna(q32) and pd.notna(q12) else np.nan
+            # log1p
+            goal_log_all = np.log1p(pd.to_numeric(df_src["Goal"], errors="coerce"))
+            med2, q12, q32 = median_iqr(goal_log_all)
+            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
             st.caption(f"log1p(Goal): Median={med2:.3f} | IQR={iqr2:.3f}")
 
-            plot_goal_log = np.log1p(pd.to_numeric(plot_df["Goal"], errors="coerce"))
-            fig2 = px.box(pd.DataFrame({"goal_log": plot_goal_log}), x="goal_log", points=points_mode, title="Boxplot: Goal (Log)")
+            goal_log_plot = np.log1p(pd.to_numeric(plot_df["Goal"], errors="coerce"))
+            fig2 = px.box(pd.DataFrame({"goal_log": goal_log_plot}), x="goal_log", points=points_mode, title="Boxplot: Goal (Log)")
             fig2.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
             show_plot(fig2, f"{fig_key_prefix}_goal_log")
         else:
             st.warning("ไม่พบคอลัมน์ Goal")
 
-    # ---------------- Pledged ----------------
+    # Pledged
     with c2:
         st.markdown("**Pledged**")
         if "Pledged" in df_src.columns:
             med, q1, q3 = median_iqr(df_src["Pledged"])
-            iqr = q3 - q1 if pd.notna(q3) and pd.notna(q1) else np.nan
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
             st.caption(f"Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
 
             fig = px.box(plot_df, x="Pledged", points=points_mode, title="Boxplot: Pledged (Raw)")
             fig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
             show_plot(fig, f"{fig_key_prefix}_pledged_raw")
 
-            pledged_log = np.log1p(pd.to_numeric(df_src["Pledged"], errors="coerce"))
-            med2, q12, q32 = median_iqr(pledged_log)
-            iqr2 = q32 - q12 if pd.notna(q32) and pd.notna(q12) else np.nan
+            pledged_log_all = np.log1p(pd.to_numeric(df_src["Pledged"], errors="coerce"))
+            med2, q12, q32 = median_iqr(pledged_log_all)
+            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
             st.caption(f"log1p(Pledged): Median={med2:.3f} | IQR={iqr2:.3f}")
 
-            plot_pledged_log = np.log1p(pd.to_numeric(plot_df["Pledged"], errors="coerce"))
-            fig2 = px.box(pd.DataFrame({"pledged_log": plot_pledged_log}), x="pledged_log", points=points_mode, title="Boxplot: Pledged (Log)")
+            pledged_log_plot = np.log1p(pd.to_numeric(plot_df["Pledged"], errors="coerce"))
+            fig2 = px.box(pd.DataFrame({"pledged_log": pledged_log_plot}), x="pledged_log", points=points_mode, title="Boxplot: Pledged (Log)")
             fig2.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
             show_plot(fig2, f"{fig_key_prefix}_pledged_log")
         else:
             st.warning("ไม่พบคอลัมน์ Pledged")
+
 
 
     st.markdown("### ก่อนทำความสะอาด (Before) — Outlier View")
@@ -763,4 +794,5 @@ with tab4:
         show_plot(fig, "ins5_duration")
 
     st.caption("หมายเหตุ: กราฟทุกอันใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
+
 
