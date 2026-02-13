@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+plotly
+gdown
+pyarrow
+pyplot 
+streamlit
+pandas
+numpy
+plotly
+requests
+statsmodels
