@@ -486,61 +486,40 @@ with tab1:
     )
 
 # ==========================================================
-# TAB 2: Data Quality & Cleaning Steps (+ Outlier Before/After)
+# Helper for Outlier Panel (ต้องอยู่ก่อนใช้งาน)
 # ==========================================================
-with tab2:
-    st.markdown("## Before vs After")
+def median_iqr(s: pd.Series):
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    if s.empty:
+        return np.nan, np.nan, np.nan
+    q1 = s.quantile(0.25)
+    med = s.quantile(0.50)
+    q3 = s.quantile(0.75)
+    return med, q1, q3
 
-    outlier_panel(df_before, "Before", "out_before")
-    outlier_panel(df_after, "After", "out_after")
+def money_short(x):
+    try:
+        if pd.isna(x):
+            return "-"
+        x = float(x)
+        if abs(x) >= 1_000_000_000:
+            return f"{x/1_000_000_000:.2f}B"
+        if abs(x) >= 1_000_000:
+            return f"{x/1_000_000:.2f}M"
+        if abs(x) >= 1_000:
+            return f"{x/1_000:.2f}K"
+        return f"{x:.0f}"
+    except Exception:
+        return "-"
 
-    st.markdown("---")   # ✅ เยื้องเท่าบรรทัดอื่นใน tab2
+def outlier_panel(df_src: pd.DataFrame, title_prefix: str, fig_key_prefix: str):
+    st.markdown(f"### {title_prefix} — Outlier (Goal / Pledged)")
 
-    st.markdown("## Before vs After (คุณภาพข้อมูล)")
-    st.caption("แสดงโครงสร้างข้อมูล + ขั้นตอนทำความสะอาด + การจัดการ Outlier (ไม่ลบ, ใช้ Log Transformation, ดู Median/IQR)")
-    
-
-    b1, b2 = st.columns(2)
-    with b1:
-        st.markdown("### ก่อนทำความสะอาด (Before)")
-        st.write(f"Shape: **{df_before_raw.shape[0]:,} แถว × {df_before_raw.shape[1]:,} คอลัมน์**")
-        st.dataframe(
-            df_before_raw.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
-            use_container_width=True,
-        )
-
-    with b2:
-        st.markdown("### หลังทำความสะอาด (After)")
-        st.write(f"Shape: **{df_after_raw.shape[0]:,} แถว × {df_after_raw.shape[1]:,} คอลัมน์**")
-        st.dataframe(
-            df_after_raw.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
-            use_container_width=True,
-        )
-        st.markdown("---")
-st.markdown("### Outlier (Before vs After) — ไม่ลบค่า ใช้ Log Transformation")
-
-outlier_panel(df_before, "ก่อนทำความสะอาด (Before)", "out_before")
-outlier_panel(df_after,  "หลังทำความสะอาด (After)",  "out_after")
-
-    st.markdown("---")
-    st.markdown("## ขั้นตอนการจัดการ Outlier (Outlier) — Goal และ Pledged")
-
-    st.info(
-        """
-- **ไม่ลบค่าที่สูงผิดปกติออก (Do not remove extreme values)** เพราะอาจเป็น “โครงการขนาดใหญ่” ที่เกิดขึ้นจริง  
-- ใช้ **การแปลงลอการิทึม (Log Transformation / log1p)** เพื่อลดความเบ้ (Skewness)  
-- วิเคราะห์ร่วมกับ **ค่ากลาง (Median)** และ **ช่วงการกระจาย (IQR = Q3-Q1)** เพื่อสรุปภาพรวมได้แม่นกว่า mean
-        """
-    )
-
-   def outlier_panel(df_src: pd.DataFrame, title_prefix: str, fig_key_prefix: str):
-    st.markdown(f"#### {title_prefix} — Outlier (Outlier) ของ Goal และ Pledged")
-
-    # Controls (กันค้าง)
+    # กันค้าง: sample + toggle points
     cA, cB, cC = st.columns([1, 1, 2])
     with cA:
         sample_n = st.number_input(
-            "จำนวนตัวอย่างสำหรับ plot (sample size)",
+            "sample size (สำหรับ plot)",
             min_value=1000,
             max_value=20000,
             value=5000,
@@ -556,39 +535,130 @@ outlier_panel(df_after,  "หลังทำความสะอาด (After)"
     with cC:
         st.caption("แนะนำ: ปิด points และใช้ sample 3k–10k จะลื่นสุด")
 
-    # sample
     plot_df = df_src
     if len(plot_df) > sample_n:
         plot_df = plot_df.sample(n=int(sample_n), random_state=42)
 
     points_mode = "outliers" if show_points else False
 
-    c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-    # Goal
-    with c1:
-        st.markdown("**Goal**")
-        if "Goal" in df_src.columns:
+    # -------------------------
+    # Goal: raw + log
+    # -------------------------
+    with col1:
+        st.markdown("#### Goal")
+
+        if "Goal" not in df_src.columns:
+            st.warning("ไม่พบคอลัมน์ Goal")
+        else:
             med, q1, q3 = median_iqr(df_src["Goal"])
             iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
-            st.caption(f"Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
+            st.caption(f"Raw: Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
 
-            fig = px.box(plot_df, x="Goal", points=points_mode, title="Boxplot: Goal (Raw)")
-            fig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            show_plot(fig, f"{fig_key_prefix}_goal_raw")
+            fig_raw = px.box(
+                plot_df,
+                x=pd.to_numeric(plot_df["Goal"], errors="coerce"),
+                points=points_mode,
+                title="Boxplot: Goal (Raw)",
+            )
+            fig_raw.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(fig_raw, use_container_width=True, key=f"{fig_key_prefix}_goal_raw")
 
-            # log1p
             goal_log_all = np.log1p(pd.to_numeric(df_src["Goal"], errors="coerce"))
             med2, q12, q32 = median_iqr(goal_log_all)
             iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
-            st.caption(f"log1p(Goal): Median={med2:.3f} | IQR={iqr2:.3f}")
+            st.caption(f"Log1p: Median={med2:.3f} | IQR={iqr2:.3f}")
 
             goal_log_plot = np.log1p(pd.to_numeric(plot_df["Goal"], errors="coerce"))
-            fig2 = px.box(pd.DataFrame({"goal_log": goal_log_plot}), x="goal_log", points=points_mode, title="Boxplot: Goal (Log)")
-            fig2.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
-            show_plot(fig2, f"{fig_key_prefix}_goal_log")
+            fig_log = px.box(
+                pd.DataFrame({"goal_log": goal_log_plot}),
+                x="goal_log",
+                points=points_mode,
+                title="Boxplot: Goal (Log1p)",
+            )
+            fig_log.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(fig_log, use_container_width=True, key=f"{fig_key_prefix}_goal_log")
+
+    # -------------------------
+    # Pledged: raw + log
+    # -------------------------
+    with col2:
+        st.markdown("#### Pledged")
+
+        if "Pledged" not in df_src.columns:
+            st.warning("ไม่พบคอลัมน์ Pledged")
         else:
-            st.warning("ไม่พบคอลัมน์ Goal")
+            med, q1, q3 = median_iqr(df_src["Pledged"])
+            iqr = (q3 - q1) if pd.notna(q3) and pd.notna(q1) else np.nan
+            st.caption(f"Raw: Median={money_short(med)} | IQR={money_short(iqr)} (Q1={money_short(q1)}, Q3={money_short(q3)})")
+
+            fig_raw = px.box(
+                plot_df,
+                x=pd.to_numeric(plot_df["Pledged"], errors="coerce"),
+                points=points_mode,
+                title="Boxplot: Pledged (Raw)",
+            )
+            fig_raw.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(fig_raw, use_container_width=True, key=f"{fig_key_prefix}_pledged_raw")
+
+            pledged_log_all = np.log1p(pd.to_numeric(df_src["Pledged"], errors="coerce"))
+            med2, q12, q32 = median_iqr(pledged_log_all)
+            iqr2 = (q32 - q12) if pd.notna(q32) and pd.notna(q12) else np.nan
+            st.caption(f"Log1p: Median={med2:.3f} | IQR={iqr2:.3f}")
+
+            pledged_log_plot = np.log1p(pd.to_numeric(plot_df["Pledged"], errors="coerce"))
+            fig_log = px.box(
+                pd.DataFrame({"pledged_log": pledged_log_plot}),
+                x="pledged_log",
+                points=points_mode,
+                title="Boxplot: Pledged (Log1p)",
+            )
+            fig_log.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(fig_log, use_container_width=True, key=f"{fig_key_prefix}_pledged_log")
+
+
+# ==========================================================
+# TAB 2: Data Quality & Cleaning Steps (+ Outlier Before/After)
+# ==========================================================
+with tab2:
+    st.markdown("## คุณภาพข้อมูล & ขั้นตอนทำความสะอาด (Before vs After)")
+    st.caption("โครงสร้างข้อมูล + แนวทางทำความสะอาด + การจัดการ outlier (ไม่ลบ, ใช้ Log1p, ดู Median/IQR)")
+
+    # 1) สรุปโครงสร้าง Before/After
+    b1, b2 = st.columns(2)
+    with b1:
+        st.markdown("### ก่อนทำความสะอาด (Before)")
+        st.write(f"Shape: **{df_before.shape[0]:,} แถว × {df_before.shape[1]:,} คอลัมน์**")
+        st.dataframe(
+            df_before.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
+            use_container_width=True,
+        )
+
+    with b2:
+        st.markdown("### หลังทำความสะอาด (After)")
+        st.write(f"Shape: **{df_after.shape[0]:,} แถว × {df_after.shape[1]:,} คอลัมน์**")
+        st.dataframe(
+            df_after.dtypes.astype(str).reset_index().rename(columns={"index": "Feature", 0: "dtype"}),
+            use_container_width=True,
+        )
+
+    st.markdown("---")
+
+    # 2) Outlier Before vs After (กันค้างด้วย sample + points toggle)
+    st.markdown("## Outlier (Before vs After) — ไม่ลบค่า ใช้ Log Transformation (log1p)")
+    st.info(
+        """
+- **ไม่ลบค่าที่สูงผิดปกติ (Do not remove extreme values)** เพราะอาจเป็นโครงการขนาดใหญ่ที่เกิดขึ้นจริง  
+- ใช้ **Log Transformation (log1p)** เพื่อลดความเบ้ (Skewness) ทำให้เห็นรูปแบบข้อมูลชัดขึ้น  
+- สรุปด้วย **Median** และ **IQR (Q3-Q1)** เพราะ robust กว่า mean เมื่อข้อมูลมี outlier จำนวนมาก
+        """
+    )
+
+    outlier_panel(df_before, "Before", "out_before")
+    st.markdown("---")
+    outlier_panel(df_after, "After", "out_after")
+
 
     # Pledged
     with c2:
@@ -801,6 +871,7 @@ with tab4:
         show_plot(fig, "ins5_duration")
 
     st.caption("หมายเหตุ: กราฟทุกอันใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
+
 
 
 
