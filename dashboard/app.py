@@ -25,10 +25,6 @@ def load_drive_csv(url: str) -> pd.DataFrame:
     csv_url = f"https://drive.google.com/uc?export=download&id={fid}"
     return pd.read_csv(csv_url)
 
-df_before = load_drive_csv(BEFORE_URL)
-df_after  = load_drive_csv(AFTER_URL)
-
-
 
 # -----------------------------
 # Page Config
@@ -755,6 +751,7 @@ with tab4:
         st.warning("ไม่พบคอลัมน์ Pledged/Backers หรือไม่มีข้อมูลหลังกรอง")
 
     st.markdown("---")
+
 
 
 
