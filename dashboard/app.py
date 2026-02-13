@@ -578,7 +578,7 @@ with tab2:
     )
 
     
-    outlier_panel(df_after_work, "After", "out_after")
+    outlier_panel(df_after_work, "Before vs After", "out_after")
 
     st.markdown("---")
     with st.expander("สรุปขั้นตอนทำความสะอาด (Cleaning Steps)"):
@@ -759,5 +759,6 @@ with tab4:
         show_plot(fig, "ins5_duration")
 
     st.caption("หมายเหตุ: ทุกกราฟใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
+
 
 
