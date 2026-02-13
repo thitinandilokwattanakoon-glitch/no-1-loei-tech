@@ -2,9 +2,5 @@ streamlit
 pandas
 numpy
 plotly
-gdown
-pyarrow
-pyplot 
 requests
-statsmodels
 
