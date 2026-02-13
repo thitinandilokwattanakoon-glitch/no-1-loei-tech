@@ -489,6 +489,13 @@ with tab1:
 # TAB 2: Data Quality & Cleaning Steps (+ Outlier Before/After)
 # ==========================================================
 with tab2:
+    st.markdown("## Before vs After")
+
+    outlier_panel(df_before, "Before", "out_before")
+    outlier_panel(df_after, "After", "out_after")
+
+    st.markdown("---")   # ✅ เยื้องเท่าบรรทัดอื่นใน tab2
+
     st.markdown("## Before vs After (คุณภาพข้อมูล)")
     st.caption("แสดงโครงสร้างข้อมูล + ขั้นตอนทำความสะอาด + การจัดการ Outlier (ไม่ลบ, ใช้ Log Transformation, ดู Median/IQR)")
     
@@ -794,5 +801,6 @@ with tab4:
         show_plot(fig, "ins5_duration")
 
     st.caption("หมายเหตุ: กราฟทุกอันใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
+
 
 
