@@ -542,10 +542,14 @@ with tab1:
 # ==========================================================
 # TAB 2: Data Quality + Outlier Before/After
 # ==========================================================
+# ==========================================================
+# TAB 2: Data Quality + Outlier Before/After
+# ==========================================================
 with tab2:
     st.markdown("## คุณภาพข้อมูล & ขั้นตอนทำความสะอาด (Before vs After)")
     st.caption("โครงสร้างข้อมูล + การจัดการ outlier (ไม่ลบ, ใช้ log1p, ดู Median/IQR)")
 
+    # 1) สรุปโครงสร้าง Before/After
     b1, b2 = st.columns(2)
     with b1:
         st.markdown("### ก่อนทำความสะอาด (Before)")
@@ -565,7 +569,8 @@ with tab2:
 
     st.markdown("---")
 
-    st.markdown("## Outlier (Before vs After) — ไม่ลบค่า ใช้ Log Transformation (log1p)")
+    # 2) Outlier Before vs After (แสดงครั้งเดียว ไม่ซ้ำ)
+    st.markdown("## Before vs After— Outlier (Goal / Pledged)")
     st.info(
         """
 - **ไม่ลบค่าที่สูงผิดปกติ (Do not remove extreme values)** เพราะอาจเป็นโครงการขนาดใหญ่ที่เกิดขึ้นจริง  
@@ -588,6 +593,7 @@ with tab2:
 4) จัดการ Outlier (Outlier Handling): **ไม่ลบ** → ใช้ **log1p** ลด skew + ใช้ **Median/IQR** อธิบายร่วม  
             """
         )
+
 
 # ==========================================================
 # TAB 3: EDA & Correlation
@@ -756,3 +762,4 @@ with tab4:
         show_plot(fig, "ins5_duration")
 
     st.caption("หมายเหตุ: ทุกกราฟใส่ key แล้ว ป้องกัน StreamlitDuplicateElementId และไม่ใช้ matplotlib เพื่อดีพลอยบน Streamlit Cloud ได้ชัวร์")
+
